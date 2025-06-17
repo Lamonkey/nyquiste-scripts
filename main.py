@@ -163,6 +163,27 @@ def create_zip_file(local_path):
     
     return zip_path
 
+def test_ssh_connection(host, port, username, password):
+    """Simple SSH connection test."""
+    print("Testing SSH connection...")
+    try:
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(
+            hostname=host, 
+            port=port, 
+            username=username, 
+            password=password,
+            timeout=10
+        )
+        ssh.close()
+        print("✓ SSH connection successful")
+        return True
+    except Exception as e:
+        print(f"✗ SSH connection failed: {e}")
+        print("Please check your connection parameters and try again.")
+        return False
+
 def run_single_test(host, port, username, password, local_path,
                    remote_dir, test_name):
     """Run a single test synchronously."""
@@ -393,6 +414,10 @@ Examples:
         print(f"Host: {args.host}:{args.port}")
         print(f"Local path: {args.local_path}")
         print(f"Remote directory: {args.remote_dir}")
+        
+        # Simple SSH connection test before doing anything expensive
+        if not test_ssh_connection(args.host, args.port, args.username, args.password):
+            sys.exit(1)
         
         # Check if the local path is very large
         if os.path.isdir(args.local_path):
