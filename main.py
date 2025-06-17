@@ -2,10 +2,8 @@ import os
 import time
 import zipfile
 import paramiko
-import asyncio
 import argparse
 import sys
-from concurrent.futures import ThreadPoolExecutor
 import tempfile
 
 def zip_file(input_file, output_zip):
@@ -147,18 +145,6 @@ def ssh_unzip(ssh, remote_zip, remote_dest):
         print("Unzip succeeded.")
         return True
 
-async def run_async_test(host, port, username, password, local_path,
-                         remote_dir, test_name):
-    """Run a single test asynchronously."""
-    loop = asyncio.get_event_loop()
-    
-    with ThreadPoolExecutor() as executor:
-        return await loop.run_in_executor(
-            executor, 
-            run_single_test, 
-            host, port, username, password, local_path, remote_dir, test_name
-        )
-
 def create_zip_file(local_path):
     """Create a zip file from the given local path and return the zip file path."""
     temp_dir = tempfile.gettempdir()
@@ -192,20 +178,20 @@ def run_single_test(host, port, username, password, local_path,
         # Now establish SSH connection
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(hostname=host, port=port, username=username, password=password)
+        ssh.connect(hostname=host, port=port, username=username, 
+                   password=password)
         
         # Clear and recreate remote directory
         print(f"Clearing remote directory: {remote_dir}")
         clear_remote_directory(ssh, remote_dir)
-        print(
-            f"Creating remote directory: {remote_dir}"
-        )
+        print(f"Creating remote directory: {remote_dir}")
         create_remote_dir(ssh, remote_dir)
         
         sftp = ssh.open_sftp()
         
         # Upload the pre-created zip file
-        remote_zip = os.path.join(remote_dir, os.path.basename(zip_path)).replace('\\', '/')
+        remote_zip = (os.path.join(remote_dir, os.path.basename(zip_path))
+                     .replace('\\', '/'))
         
         print("Uploading zip file...")
         upload_time = sftp_upload(sftp, zip_path, remote_zip)
@@ -238,14 +224,13 @@ def run_single_test(host, port, username, password, local_path,
         # Establish SSH connection for recursive upload
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(hostname=host, port=port, username=username, password=password)
+        ssh.connect(hostname=host, port=port, username=username, 
+                   password=password)
         
         # Clear and recreate remote directory
         print(f"Clearing remote directory: {remote_dir}")
         clear_remote_directory(ssh, remote_dir)
-        print(
-            f"Creating remote directory: {remote_dir}"
-        )
+        print(f"Creating remote directory: {remote_dir}")
         create_remote_dir(ssh, remote_dir)
         
         sftp = ssh.open_sftp()
@@ -270,42 +255,45 @@ def run_single_test(host, port, username, password, local_path,
     
     return result
 
-async def run_comprehensive_tests(host, port, username, password, local_path, remote_dir):
+def run_comprehensive_tests(host, port, username, password, local_path, 
+                           remote_dir):
     """Run comprehensive speed comparison tests."""
     print(f"\n{'='*80}")
-    print(f"COMPREHENSIVE UPLOAD SPEED COMPARISON TEST")
+    print("COMPREHENSIVE UPLOAD SPEED COMPARISON TEST")
     print(f"{'='*80}")
     print(f"Local path: {local_path}")
     print(f"Remote directory: {remote_dir}")
     print(f"Server: {host}:{port}")
     
     # Run tests sequentially to avoid conflicts
-    print(f"\nRunning tests sequentially...")
+    print("\nRunning tests sequentially...")
     
     # Run ZIP test first
-    zip_result = await run_async_test(
-        host, port, username, password, local_path, remote_dir, "ZIP Upload Test"
+    zip_result = run_single_test(
+        host, port, username, password, local_path, remote_dir, 
+        "ZIP Upload Test"
     )
     
     # Run recursive test second
-    recursive_result = await run_async_test(
-        host, port, username, password, local_path, remote_dir, "Recursive Upload Test"
+    recursive_result = run_single_test(
+        host, port, username, password, local_path, remote_dir, 
+        "Recursive Upload Test"
     )
     
     results = [zip_result, recursive_result]
     
     # Generate comprehensive report
     print(f"\n{'='*80}")
-    print(f"SPEED COMPARISON REPORT")
+    print("SPEED COMPARISON REPORT")
     print(f"{'='*80}")
     
-    print(f"\nZIP Upload Test:")
+    print("\nZIP Upload Test:")
     print(f"  Upload time: {zip_result['upload_time']:.2f} seconds")
     print(f"  Unzip time: {zip_result['unzip_time']:.2f} seconds")
     print(f"  Total time: {zip_result['total_time']:.2f} seconds")
     print(f"  Success: {zip_result['success']}")
     
-    print(f"\nRecursive Upload Test:")
+    print("\nRecursive Upload Test:")
     print(f"  Upload time: {recursive_result['upload_time']:.2f} seconds")
     print(f"  Total time: {recursive_result['total_time']:.2f} seconds")
     print(f"  Files uploaded: {recursive_result['uploaded_files']}")
@@ -318,7 +306,7 @@ async def run_comprehensive_tests(host, port, username, password, local_path, re
                    if recursive_result['total_time'] > 0 else float('inf'))
     
     print(f"\n{'='*50}")
-    print(f"COMPARISON SUMMARY")
+    print("COMPARISON SUMMARY")
     print(f"{'='*50}")
     
     if time_diff > 0:
@@ -328,17 +316,13 @@ async def run_comprehensive_tests(host, port, username, password, local_path, re
         print(f"Recursive method is {abs(time_diff):.2f} seconds FASTER")
         print(f"Recursive method is {1/speed_ratio:.2f}x faster than ZIP upload")
     
-    print(f"\nRecommendation:")
+    print("\nRecommendation:")
     if zip_result['total_time'] < recursive_result['total_time']:
-        print(f"  Use ZIP upload method for better performance")
+        print("  Use ZIP upload method for better performance")
     else:
-        print(f"  Use recursive upload method for better performance")
+        print("  Use recursive upload method for better performance")
     
     return results
-
-def run_tests(host, port, username, password, local_path, remote_dir):
-    """Legacy function for backward compatibility."""
-    asyncio.run(run_comprehensive_tests(host, port, username, password, local_path, remote_dir))
 
 def main():
     """CLI entry point for the upload speed comparison tool."""
@@ -405,7 +389,7 @@ Examples:
         sys.exit(1)
     
     try:
-        print(f"Starting upload speed comparison test...")
+        print("Starting upload speed comparison test...")
         print(f"Host: {args.host}:{args.port}")
         print(f"Local path: {args.local_path}")
         print(f"Remote directory: {args.remote_dir}")
@@ -432,14 +416,14 @@ Examples:
                         sys.exit(0)
         
         # Run the comprehensive tests
-        asyncio.run(run_comprehensive_tests(
+        run_comprehensive_tests(
             host=args.host,
             port=args.port,
             username=args.username,
             password=args.password,
             local_path=args.local_path,
             remote_dir=args.remote_dir
-        ))
+        )
         
     except KeyboardInterrupt:
         print("\nTest interrupted by user.")
