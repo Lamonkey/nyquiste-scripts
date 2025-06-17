@@ -39,21 +39,39 @@ def sftp_upload(sftp, local_path, remote_path):
         print(f"Upload failed: {e}")
         raise
 
-def sftp_upload_folder_recursive(sftp, local_folder, remote_folder):
+def sftp_upload_folder_recursive(sftp, local_folder, remote_folder, ssh=None):
     """Upload a folder recursively via SFTP with progress reporting."""
     start = time.time()
     
     def upload_file(local_file, remote_file):
-        try:
-            # Set timeout for each file upload
-            sftp.get_channel().settimeout(60)  # 1 minute per file
-            sftp.put(local_file, remote_file)
-            file_size = os.path.getsize(local_file)
-            print(f"  ✓ {os.path.basename(local_file)} ({file_size / 1024:.1f} KB)")
-            return True
-        except Exception as e:
-            print(f"  ✗ {os.path.basename(local_file)}: {e}")
-            return False
+        nonlocal sftp
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Set timeout for each file upload
+                sftp.get_channel().settimeout(60)  # 1 minute per file
+                sftp.put(local_file, remote_file)
+                file_size = os.path.getsize(local_file)
+                print(f"  ✓ {os.path.basename(local_file)} "
+                      f"({file_size / 1024:.1f} KB)")
+                return True
+            except Exception as e:
+                if ("Socket is closed" in str(e) and 
+                        attempt < max_retries - 1 and ssh is not None):
+                    print(f"  ⚠ Socket closed, reopening connection "
+                          f"(attempt {attempt + 1}/{max_retries})...")
+                    try:
+                        # Reopen SFTP connection
+                        sftp.close()
+                        sftp = ssh.open_sftp()
+                        continue
+                    except Exception as reconnect_error:
+                        print(f"  ✗ Failed to reopen connection: {reconnect_error}")
+                        return False
+                else:
+                    print(f"  ✗ {os.path.basename(local_file)}: {e}")
+                    return False
+        return False
     
     uploaded_count = 0
     failed_count = 0
@@ -259,7 +277,7 @@ def run_single_test(host, port, username, password, local_path,
         # Recursive upload test
         print("Uploading folder recursively...")
         upload_time, uploaded_count, failed_count = (
-            sftp_upload_folder_recursive(sftp, local_path, remote_dir)
+            sftp_upload_folder_recursive(sftp, local_path, remote_dir, ssh)
         )
         
         result = {
