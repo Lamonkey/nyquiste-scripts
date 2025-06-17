@@ -22,25 +22,47 @@ def zip_folder(input_folder, output_zip):
                 zipf.write(abs_path, arcname=rel_path)
 
 def sftp_upload(sftp, local_path, remote_path):
+    """Upload a file with progress reporting and timeout handling."""
     start = time.time()
-    sftp.put(local_path, remote_path)
-    end = time.time()
-    return end - start
+    
+    # Get file size for progress reporting
+    file_size = os.path.getsize(local_path)
+    print(f"Uploading {os.path.basename(local_path)} ({file_size / (1024*1024):.1f} MB)...")
+    
+    # Set longer timeout for large files
+    sftp.get_channel().settimeout(300)  # 5 minutes timeout
+    
+    try:
+        sftp.put(local_path, remote_path)
+        end = time.time()
+        print(f"Upload completed in {end - start:.2f} seconds")
+        return end - start
+    except Exception as e:
+        print(f"Upload failed: {e}")
+        raise
 
 def sftp_upload_folder_recursive(sftp, local_folder, remote_folder):
-    """Upload a folder recursively via SFTP."""
+    """Upload a folder recursively via SFTP with progress reporting."""
     start = time.time()
     
     def upload_file(local_file, remote_file):
         try:
+            # Set timeout for each file upload
+            sftp.get_channel().settimeout(60)  # 1 minute per file
             sftp.put(local_file, remote_file)
+            file_size = os.path.getsize(local_file)
+            print(f"  ✓ {os.path.basename(local_file)} ({file_size / 1024:.1f} KB)")
             return True
         except Exception as e:
-            print(f"Failed to upload {local_file}: {e}")
+            print(f"  ✗ {os.path.basename(local_file)}: {e}")
             return False
     
     uploaded_count = 0
     failed_count = 0
+    
+    # Count total files first
+    total_files = sum(len(files) for _, _, files in os.walk(local_folder))
+    print(f"Found {total_files} files to upload...")
     
     for root, _, files in os.walk(local_folder):
         for file in files:
@@ -137,6 +159,24 @@ async def run_async_test(host, port, username, password, local_path,
             host, port, username, password, local_path, remote_dir, test_name
         )
 
+def create_zip_file(local_path):
+    """Create a zip file from the given local path and return the zip file path."""
+    temp_dir = tempfile.gettempdir()
+    zip_filename = f"upload_test_{int(time.time())}.zip"
+    zip_path = os.path.join(temp_dir, zip_filename)
+    
+    print(f"Creating zip file: {zip_path}")
+    if os.path.isdir(local_path):
+        zip_folder(local_path, zip_path)
+    else:
+        zip_file(local_path, zip_path)
+    
+    # Get zip file size for progress reporting
+    zip_size = os.path.getsize(zip_path)
+    print(f"Zip file created: {zip_size / (1024*1024):.1f} MB")
+    
+    return zip_path
+
 def run_single_test(host, port, username, password, local_path,
                    remote_dir, test_name):
     """Run a single test synchronously."""
@@ -144,32 +184,28 @@ def run_single_test(host, port, username, password, local_path,
     print(f"Running {test_name}")
     print(f"{'='*60}")
     
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(hostname=host, port=port, username=username, password=password)
-    
-    # Clear and recreate remote directory
-    print(f"Clearing remote directory: {remote_dir}")
-    clear_remote_directory(ssh, remote_dir)
-    print(
-        f"Creating remote directory: {remote_dir}"
-    )
-    create_remote_dir(ssh, remote_dir)
-    
-    sftp = ssh.open_sftp()
-    
     if test_name == "ZIP Upload Test":
-        # Zip upload test - create unique zip file name
-        temp_dir = tempfile.gettempdir()
-        zip_filename = f"upload_test_{int(time.time())}.zip"
-        zip_path = os.path.join(temp_dir, zip_filename)
-        remote_zip = os.path.join(remote_dir, zip_filename).replace('\\', '/')
+        # Create zip file BEFORE establishing connection
+        print("Creating zip file before connection...")
+        zip_path = create_zip_file(local_path)
         
-        print(f"Creating zip file: {zip_path}")
-        if os.path.isdir(local_path):
-            zip_folder(local_path, zip_path)
-        else:
-            zip_file(local_path, zip_path)
+        # Now establish SSH connection
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(hostname=host, port=port, username=username, password=password)
+        
+        # Clear and recreate remote directory
+        print(f"Clearing remote directory: {remote_dir}")
+        clear_remote_directory(ssh, remote_dir)
+        print(
+            f"Creating remote directory: {remote_dir}"
+        )
+        create_remote_dir(ssh, remote_dir)
+        
+        sftp = ssh.open_sftp()
+        
+        # Upload the pre-created zip file
+        remote_zip = os.path.join(remote_dir, os.path.basename(zip_path)).replace('\\', '/')
         
         print("Uploading zip file...")
         upload_time = sftp_upload(sftp, zip_path, remote_zip)
@@ -195,11 +231,29 @@ def run_single_test(host, port, username, password, local_path,
             'success': unzip_success
         }
         
+        sftp.close()
+        ssh.close()
+        
     elif test_name == "Recursive Upload Test":
+        # Establish SSH connection for recursive upload
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(hostname=host, port=port, username=username, password=password)
+        
+        # Clear and recreate remote directory
+        print(f"Clearing remote directory: {remote_dir}")
+        clear_remote_directory(ssh, remote_dir)
+        print(
+            f"Creating remote directory: {remote_dir}"
+        )
+        create_remote_dir(ssh, remote_dir)
+        
+        sftp = ssh.open_sftp()
+        
         # Recursive upload test
         print("Uploading folder recursively...")
-        upload_time, uploaded_count, failed_count = sftp_upload_folder_recursive(
-            sftp, local_path, remote_dir
+        upload_time, uploaded_count, failed_count = (
+            sftp_upload_folder_recursive(sftp, local_path, remote_dir)
         )
         
         result = {
@@ -210,9 +264,9 @@ def run_single_test(host, port, username, password, local_path,
             'failed_files': failed_count,
             'success': failed_count == 0
         }
-    
-    sftp.close()
-    ssh.close()
+        
+        sftp.close()
+        ssh.close()
     
     return result
 
@@ -355,6 +409,27 @@ Examples:
         print(f"Host: {args.host}:{args.port}")
         print(f"Local path: {args.local_path}")
         print(f"Remote directory: {args.remote_dir}")
+        
+        # Check if the local path is very large
+        if os.path.isdir(args.local_path):
+            total_size = sum(
+                os.path.getsize(os.path.join(dirpath, filename))
+                for dirpath, dirnames, filenames in os.walk(args.local_path)
+                for filename in filenames
+            )
+            size_mb = total_size / (1024 * 1024)
+            print(f"Total size to upload: {size_mb:.1f} MB")
+            
+            if size_mb > 100:  # Warning for files larger than 100MB
+                print(f"\n⚠️  WARNING: Large folder detected ({size_mb:.1f} MB)")
+                print("   This may cause connection timeouts. Consider using a smaller test folder.")
+                print("   For testing, try using: tests/data_source")
+                
+                if not args.verbose:
+                    response = input("Continue anyway? (y/N): ")
+                    if response.lower() != 'y':
+                        print("Test cancelled.")
+                        sys.exit(0)
         
         # Run the comprehensive tests
         asyncio.run(run_comprehensive_tests(
