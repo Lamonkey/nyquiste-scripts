@@ -1,3 +1,25 @@
+"""
+Integration Test for SFTP Upload Speed Comparison
+
+This file is NOT a unit test, but rather an integration test that validates
+the complete end-to-end functionality of the SFTP upload speed comparison tool.
+
+Integration Test Purpose:
+- Tests the full workflow of connecting to a remote server via SSH/SFTP
+- Validates both ZIP upload and recursive upload methods work correctly
+- Ensures the comprehensive speed comparison report is generated properly
+- Verifies that the tool can handle real file transfers and measurements
+
+This test requires:
+- A real SSH server with valid credentials
+- Network connectivity to the remote server
+- Actual files/folders to transfer
+- Proper SFTP permissions on the remote server
+
+The test uses configuration from a .env file to connect to a real server
+and perform actual file transfers, making it a true integration test
+rather than isolated unit tests.
+"""
 import os
 import sys
 
