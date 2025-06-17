@@ -3,8 +3,10 @@ import time
 import zipfile
 import paramiko
 import asyncio
-import shutil
+import argparse
+import sys
 from concurrent.futures import ThreadPoolExecutor
+import tempfile
 
 def zip_file(input_file, output_zip):
     with zipfile.ZipFile(output_zip, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -44,13 +46,16 @@ def sftp_upload_folder_recursive(sftp, local_folder, remote_folder):
         for file in files:
             local_file = os.path.join(root, file)
             rel_path = os.path.relpath(local_file, local_folder)
-            remote_file = os.path.join(remote_folder, rel_path).replace('\\', '/')
+            remote_file = (
+                os.path.join(remote_folder, rel_path)
+                .replace('\\', '/')
+            )
             
             # Ensure remote directory exists
             remote_dir = os.path.dirname(remote_file)
             try:
                 sftp.mkdir(remote_dir)
-            except:
+            except OSError:
                 pass  # Directory might already exist
             
             if upload_file(local_file, remote_file):
@@ -88,7 +93,11 @@ def create_remote_dir(ssh, remote_dir):
 def clear_remote_directory(ssh, remote_dir):
     """Clear the remote directory completely."""
     remote_dir_unix = remote_dir.replace('\\', '/')
-    clear_cmd = f'powershell -Command "if (Test-Path \'{remote_dir_unix}\') {{ Remove-Item -Path \'{remote_dir_unix}\' -Recurse -Force }}; Write-Host \'Directory cleared: {remote_dir_unix}\'"'
+    clear_cmd = (
+        f'powershell -Command "if (Test-Path \'{remote_dir_unix}\') {{ '
+        f'Remove-Item -Path \'{remote_dir_unix}\' -Recurse -Force }}; '
+        f'Write-Host \'Directory cleared: {remote_dir_unix}\'"'
+    )
     
     stdin, stdout, stderr = ssh.exec_command(clear_cmd)
     exit_status = stdout.channel.recv_exit_status()
@@ -103,7 +112,10 @@ def clear_remote_directory(ssh, remote_dir):
         return True
 
 def ssh_unzip(ssh, remote_zip, remote_dest):
-    unzip_cmd = f'powershell -Command "Expand-Archive -Path {remote_zip} -DestinationPath {remote_dest} -Force"'
+    unzip_cmd = (
+        f'powershell -Command "Expand-Archive -Path {remote_zip} '
+        f'-DestinationPath {remote_dest} -Force"'
+    )
     stdin, stdout, stderr = ssh.exec_command(unzip_cmd)
     exit_status = stdout.channel.recv_exit_status()
     if exit_status != 0:
@@ -113,7 +125,8 @@ def ssh_unzip(ssh, remote_zip, remote_dest):
         print("Unzip succeeded.")
         return True
 
-async def run_async_test(host, port, username, password, local_path, remote_dir, test_name):
+async def run_async_test(host, port, username, password, local_path,
+                         remote_dir, test_name):
     """Run a single test asynchronously."""
     loop = asyncio.get_event_loop()
     
@@ -124,7 +137,8 @@ async def run_async_test(host, port, username, password, local_path, remote_dir,
             host, port, username, password, local_path, remote_dir, test_name
         )
 
-def run_single_test(host, port, username, password, local_path, remote_dir, test_name):
+def run_single_test(host, port, username, password, local_path,
+                   remote_dir, test_name):
     """Run a single test synchronously."""
     print(f"\n{'='*60}")
     print(f"Running {test_name}")
@@ -137,15 +151,19 @@ def run_single_test(host, port, username, password, local_path, remote_dir, test
     # Clear and recreate remote directory
     print(f"Clearing remote directory: {remote_dir}")
     clear_remote_directory(ssh, remote_dir)
-    print(f"Creating remote directory: {remote_dir}")
+    print(
+        f"Creating remote directory: {remote_dir}"
+    )
     create_remote_dir(ssh, remote_dir)
     
     sftp = ssh.open_sftp()
     
     if test_name == "ZIP Upload Test":
-        # Zip upload test
-        zip_path = local_path + '.zip'
-        remote_zip = os.path.join(remote_dir, os.path.basename(zip_path)).replace('\\', '/')
+        # Zip upload test - create unique zip file name
+        temp_dir = tempfile.gettempdir()
+        zip_filename = f"upload_test_{int(time.time())}.zip"
+        zip_path = os.path.join(temp_dir, zip_filename)
+        remote_zip = os.path.join(remote_dir, zip_filename).replace('\\', '/')
         
         print(f"Creating zip file: {zip_path}")
         if os.path.isdir(local_path):
@@ -207,21 +225,25 @@ async def run_comprehensive_tests(host, port, username, password, local_path, re
     print(f"Remote directory: {remote_dir}")
     print(f"Server: {host}:{port}")
     
-    # Run tests asynchronously
-    tasks = [
-        run_async_test(host, port, username, password, local_path, remote_dir, "ZIP Upload Test"),
-        run_async_test(host, port, username, password, local_path, remote_dir, "Recursive Upload Test")
-    ]
+    # Run tests sequentially to avoid conflicts
+    print(f"\nRunning tests sequentially...")
     
-    results = await asyncio.gather(*tasks)
+    # Run ZIP test first
+    zip_result = await run_async_test(
+        host, port, username, password, local_path, remote_dir, "ZIP Upload Test"
+    )
+    
+    # Run recursive test second
+    recursive_result = await run_async_test(
+        host, port, username, password, local_path, remote_dir, "Recursive Upload Test"
+    )
+    
+    results = [zip_result, recursive_result]
     
     # Generate comprehensive report
     print(f"\n{'='*80}")
     print(f"SPEED COMPARISON REPORT")
     print(f"{'='*80}")
-    
-    zip_result = next(r for r in results if r['test_name'] == "ZIP Upload Test")
-    recursive_result = next(r for r in results if r['test_name'] == "Recursive Upload Test")
     
     print(f"\nZIP Upload Test:")
     print(f"  Upload time: {zip_result['upload_time']:.2f} seconds")
@@ -238,7 +260,8 @@ async def run_comprehensive_tests(host, port, username, password, local_path, re
     
     # Calculate speed difference
     time_diff = recursive_result['total_time'] - zip_result['total_time']
-    speed_ratio = zip_result['total_time'] / recursive_result['total_time'] if recursive_result['total_time'] > 0 else float('inf')
+    speed_ratio = (zip_result['total_time'] / recursive_result['total_time'] 
+                   if recursive_result['total_time'] > 0 else float('inf'))
     
     print(f"\n{'='*50}")
     print(f"COMPARISON SUMMARY")
@@ -263,12 +286,95 @@ def run_tests(host, port, username, password, local_path, remote_dir):
     """Legacy function for backward compatibility."""
     asyncio.run(run_comprehensive_tests(host, port, username, password, local_path, remote_dir))
 
-if __name__ == "__main__":
-    run_tests(
-        host="your.server.ip",
-        port=22,
-        username="your_username",
-        password="your_password",
-        local_path="/path/to/local/file.txt",
-        remote_dir="C:/Users/YourUser/Uploads"
+def main():
+    """CLI entry point for the upload speed comparison tool."""
+    parser = argparse.ArgumentParser(
+        description="Upload Speed Comparison Tool - Compare ZIP vs Recursive upload methods",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python main.py --host 192.168.1.100 --username admin --password secret --local-path ./data --remote-dir "C:/Uploads"
+  python main.py -H 10.0.0.5 -u user -p pass -l ./files -r "D:/TestUploads" --port 2222
+        """
     )
+    
+    # Required arguments
+    parser.add_argument(
+        '--host', '-H',
+        required=True,
+        help='SSH server hostname or IP address'
+    )
+    parser.add_argument(
+        '--username', '-u',
+        required=True,
+        help='SSH username'
+    )
+    parser.add_argument(
+        '--password', '-p',
+        required=True,
+        help='SSH password'
+    )
+    parser.add_argument(
+        '--local-path', '-l',
+        required=True,
+        help='Local file or directory path to upload'
+    )
+    parser.add_argument(
+        '--remote-dir', '-r',
+        required=True,
+        help='Remote directory path on the server'
+    )
+    
+    # Optional arguments
+    parser.add_argument(
+        '--port',
+        type=int,
+        default=22,
+        help='SSH port (default: 22)'
+    )
+    parser.add_argument(
+        '--verbose', '-v',
+        action='store_true',
+        help='Enable verbose output'
+    )
+    
+    args = parser.parse_args()
+    
+    # Validate local path exists
+    if not os.path.exists(args.local_path):
+        print(f"Error: Local path '{args.local_path}' does not exist.")
+        sys.exit(1)
+    
+    # Validate port range
+    if not (1 <= args.port <= 65535):
+        print(f"Error: Port must be between 1 and 65535, got {args.port}")
+        sys.exit(1)
+    
+    try:
+        print(f"Starting upload speed comparison test...")
+        print(f"Host: {args.host}:{args.port}")
+        print(f"Local path: {args.local_path}")
+        print(f"Remote directory: {args.remote_dir}")
+        
+        # Run the comprehensive tests
+        asyncio.run(run_comprehensive_tests(
+            host=args.host,
+            port=args.port,
+            username=args.username,
+            password=args.password,
+            local_path=args.local_path,
+            remote_dir=args.remote_dir
+        ))
+        
+    except KeyboardInterrupt:
+        print("\nTest interrupted by user.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error running tests: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
