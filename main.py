@@ -40,32 +40,78 @@ def sftp_upload(sftp, local_path, remote_path):
         raise
 
 def sftp_upload_folder_recursive(sftp, local_folder, remote_folder, ssh=None):
-    """Upload a folder recursively via SFTP with progress reporting."""
+    """Upload a folder recursively via SFTP."""
     start = time.time()
     
     # Convert to Unix-style path for remote
     remote_folder = remote_folder.replace('\\', '/')
     
-    print(f"Uploading folder recursively: {local_folder} -> "
-          f"{remote_folder}")
+    print(f"Uploading folder recursively: {local_folder} -> {remote_folder}")
     
-    try:
-        # Use paramiko's built-in recursive upload (like sftp -r put)
-        # This handles directory creation automatically
-        sftp.put(local_folder, remote_folder, recursive=True)
+    def ensure_remote_dir_exists(sftp, remote_dir):
+        """Create remote directory and all parent directories if they don't exist."""
+        # Convert to Unix-style path
+        remote_dir = remote_dir.replace('\\', '/')
         
-        # Count uploaded files for reporting
-        uploaded_count = sum(len(files)
-                            for _, _, files in os.walk(local_folder))
-        print(f"✓ Successfully uploaded {uploaded_count} files")
+        # Split path into components
+        path_parts = remote_dir.split('/')
+        current_path = ""
         
-        end = time.time()
-        return end - start, uploaded_count, 0
-        
-    except Exception as e:
-        print(f"✗ Recursive upload failed: {e}")
-        end = time.time()
-        return end - start, 0, 1
+        for part in path_parts:
+            if not part:  # Skip empty parts (leading/trailing slashes)
+                continue
+            current_path += '/' + part if current_path else part
+            
+            try:
+                sftp.stat(current_path)  # Check if directory exists
+            except FileNotFoundError:
+                try:
+                    sftp.mkdir(current_path)
+                    print(f"  Created remote directory: {current_path}")
+                except Exception as e:
+                    print(f"  Warning: Could not create directory "
+                          f"{current_path}: {e}")
+                    return False
+        return True
+    
+    uploaded_count = 0
+    failed_count = 0
+    
+    # Count total files first
+    total_files = sum(len(files) for _, _, files in os.walk(local_folder))
+    print(f"Found {total_files} files to upload...")
+    
+    for root, _, files in os.walk(local_folder):
+        for file in files:
+            local_file = os.path.join(root, file)
+            rel_path = os.path.relpath(local_file, local_folder)
+            
+            # Convert to Unix-style path for remote
+            remote_file = (os.path.join(remote_folder, rel_path)
+                          .replace('\\', '/'))
+            
+            # Ensure remote directory exists before uploading
+            remote_dir = (os.path.dirname(remote_file)
+                         .replace('\\', '/'))
+            if not ensure_remote_dir_exists(sftp, remote_dir):
+                print(f"  ✗ Failed to create directory for "
+                      f"{os.path.basename(local_file)}")
+                failed_count += 1
+                continue
+            
+            # Upload the file
+            try:
+                sftp.put(local_file, remote_file)
+                file_size = os.path.getsize(local_file)
+                print(f"  ✓ {os.path.basename(local_file)} "
+                      f"({file_size / 1024:.1f} KB)")
+                uploaded_count += 1
+            except Exception as e:
+                print(f"  ✗ {os.path.basename(local_file)}: {e}")
+                failed_count += 1
+    
+    end = time.time()
+    return end - start, uploaded_count, failed_count
 
 def create_remote_dir(ssh, remote_dir):
     """Create remote directory if it doesn't exist."""
