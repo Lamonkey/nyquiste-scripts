@@ -43,66 +43,29 @@ def sftp_upload_folder_recursive(sftp, local_folder, remote_folder, ssh=None):
     """Upload a folder recursively via SFTP with progress reporting."""
     start = time.time()
     
-    def upload_file(local_file, remote_file):
-        nonlocal sftp
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                # Set timeout for each file upload
-                sftp.get_channel().settimeout(60)  # 1 minute per file
-                sftp.put(local_file, remote_file)
-                file_size = os.path.getsize(local_file)
-                print(f"  ✓ {os.path.basename(local_file)} "
-                      f"({file_size / 1024:.1f} KB)")
-                return True
-            except Exception as e:
-                if ("Socket is closed" in str(e) and 
-                        attempt < max_retries - 1 and ssh is not None):
-                    print(f"  ⚠ Socket closed, reopening connection "
-                          f"(attempt {attempt + 1}/{max_retries})...")
-                    try:
-                        # Reopen SFTP connection
-                        sftp.close()
-                        sftp = ssh.open_sftp()
-                        continue
-                    except Exception as reconnect_error:
-                        print(f"  ✗ Failed to reopen connection: {reconnect_error}")
-                        return False
-                else:
-                    print(f"  ✗ {os.path.basename(local_file)}: {e}")
-                    return False
-        return False
+    # Convert to Unix-style path for remote
+    remote_folder = remote_folder.replace('\\', '/')
     
-    uploaded_count = 0
-    failed_count = 0
+    print(f"Uploading folder recursively: {local_folder} -> "
+          f"{remote_folder}")
     
-    # Count total files first
-    total_files = sum(len(files) for _, _, files in os.walk(local_folder))
-    print(f"Found {total_files} files to upload...")
-    
-    for root, _, files in os.walk(local_folder):
-        for file in files:
-            local_file = os.path.join(root, file)
-            rel_path = os.path.relpath(local_file, local_folder)
-            remote_file = (
-                os.path.join(remote_folder, rel_path)
-                .replace('\\', '/')
-            )
-            
-            # Ensure remote directory exists
-            remote_dir = os.path.dirname(remote_file)
-            try:
-                sftp.mkdir(remote_dir)
-            except OSError:
-                pass  # Directory might already exist
-            
-            if upload_file(local_file, remote_file):
-                uploaded_count += 1
-            else:
-                failed_count += 1
-    
-    end = time.time()
-    return end - start, uploaded_count, failed_count
+    try:
+        # Use paramiko's built-in recursive upload (like sftp -r put)
+        # This handles directory creation automatically
+        sftp.put(local_folder, remote_folder, recursive=True)
+        
+        # Count uploaded files for reporting
+        uploaded_count = sum(len(files)
+                            for _, _, files in os.walk(local_folder))
+        print(f"✓ Successfully uploaded {uploaded_count} files")
+        
+        end = time.time()
+        return end - start, uploaded_count, 0
+        
+    except Exception as e:
+        print(f"✗ Recursive upload failed: {e}")
+        end = time.time()
+        return end - start, 0, 1
 
 def create_remote_dir(ssh, remote_dir):
     """Create remote directory if it doesn't exist."""
