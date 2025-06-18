@@ -39,40 +39,58 @@ def sftp_upload(sftp, local_path, remote_path):
         print(f"Upload failed: {e}")
         raise
 
+def exists_remote(sftp, path):
+    """Return True if a file or directory exists on the server."""
+    try:
+        sftp.stat(path)
+    except IOError:
+        return False
+    return True
+
+def sftp_mkdirs(sftp, remote_directory):
+    """Change to this dir, recursively making parent dirs if needed."""
+    dirs = []
+    head, tail = os.path.split(remote_directory.rstrip('/'))
+    while head and tail and not exists_remote(sftp, head):
+        dirs.insert(0, head)
+        head, tail = os.path.split(head)
+    for directory in dirs + [remote_directory]:
+        try:
+            sftp.mkdir(directory)
+        except IOError:
+            pass  # already exists
+
+def put_r(sftp, local_path, remote_path):
+    """Recursively upload a local directory to the remote path."""
+    if os.path.isfile(local_path):
+        # Simple file
+        dirname = os.path.dirname(remote_path)
+        if dirname:
+            sftp_mkdirs(sftp, dirname)
+        sftp.put(local_path, remote_path)
+    else:
+        # Directory: walk tree
+        for root, dirs, files in os.walk(local_path):
+            # compute remote directory for this root
+            rel = os.path.relpath(root, local_path).replace('\\', '/')
+            if rel == '.':
+                rdir = remote_path.rstrip('/')
+            else:
+                rdir = (remote_path.rstrip('/') + '/' + rel)
+            sftp_mkdirs(sftp, rdir)
+            for fname in files:
+                local_file = os.path.join(root, fname)
+                remote_file = rdir + '/' + fname
+                sftp.put(local_file, remote_file)
+
 def sftp_upload_folder_recursive(sftp, local_folder, remote_folder, ssh=None):
-    """Upload a folder recursively via SFTP."""
+    """Upload a folder recursively via SFTP with explicit directory creation."""
     start = time.time()
     
     # Convert to Unix-style path for remote
     remote_folder = remote_folder.replace('\\', '/')
     
     print(f"Uploading folder recursively: {local_folder} -> {remote_folder}")
-    
-    def ensure_remote_dir_exists(sftp, remote_dir):
-        """Create remote directory and all parent directories if they don't exist."""
-        # Convert to Unix-style path
-        remote_dir = remote_dir.replace('\\', '/')
-        
-        # Split path into components
-        path_parts = remote_dir.split('/')
-        current_path = ""
-        
-        for part in path_parts:
-            if not part:  # Skip empty parts (leading/trailing slashes)
-                continue
-            current_path += '/' + part if current_path else part
-            
-            try:
-                sftp.stat(current_path)  # Check if directory exists
-            except FileNotFoundError:
-                try:
-                    sftp.mkdir(current_path)
-                    print(f"  Created remote directory: {current_path}")
-                except Exception as e:
-                    print(f"  Warning: Could not create directory "
-                          f"{current_path}: {e}")
-                    return False
-        return True
     
     uploaded_count = 0
     failed_count = 0
@@ -81,34 +99,22 @@ def sftp_upload_folder_recursive(sftp, local_folder, remote_folder, ssh=None):
     total_files = sum(len(files) for _, _, files in os.walk(local_folder))
     print(f"Found {total_files} files to upload...")
     
-    for root, _, files in os.walk(local_folder):
-        for file in files:
-            local_file = os.path.join(root, file)
-            rel_path = os.path.relpath(local_file, local_folder)
-            
-            # Convert to Unix-style path for remote
-            remote_file = (os.path.join(remote_folder, rel_path)
-                          .replace('\\', '/'))
-            
-            # Ensure remote directory exists before uploading
-            remote_dir = (os.path.dirname(remote_file)
-                         .replace('\\', '/'))
-            if not ensure_remote_dir_exists(sftp, remote_dir):
-                print(f"  ✗ Failed to create directory for "
-                      f"{os.path.basename(local_file)}")
-                failed_count += 1
-                continue
-            
-            # Upload the file
-            try:
-                sftp.put(local_file, remote_file)
+    try:
+        # Use the improved put_r function
+        put_r(sftp, local_folder, remote_folder)
+        
+        # Count successful uploads by walking the local directory
+        for root, _, files in os.walk(local_folder):
+            for file in files:
+                local_file = os.path.join(root, file)
+                rel_path = os.path.relpath(local_file, local_folder)
                 file_size = os.path.getsize(local_file)
-                print(f"  ✓ {os.path.basename(local_file)} "
-                      f"({file_size / 1024:.1f} KB)")
+                print(f"  ✓ {rel_path} ({file_size / 1024:.1f} KB)")
                 uploaded_count += 1
-            except Exception as e:
-                print(f"  ✗ {os.path.basename(local_file)}: {e}")
-                failed_count += 1
+                
+    except Exception as e:
+        print(f"  ✗ Upload failed: {e}")
+        failed_count = total_files
     
     end = time.time()
     return end - start, uploaded_count, failed_count
