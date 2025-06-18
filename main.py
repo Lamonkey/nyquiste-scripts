@@ -217,12 +217,33 @@ def test_ssh_connection(host, port, username, password):
         print("Please check your connection parameters and try again.")
         return False
 
+def calculate_directory_stats(local_path):
+    """Calculate file count and total size of a directory."""
+    if os.path.isfile(local_path):
+        return 1, os.path.getsize(local_path)
+    
+    total_files = 0
+    total_size = 0
+    
+    for root, _, files in os.walk(local_path):
+        for file in files:
+            file_path = os.path.join(root, file)
+            total_files += 1
+            total_size += os.path.getsize(file_path)
+    
+    return total_files, total_size
+
 def run_single_test(host, port, username, password, local_path,
                    remote_dir, test_name):
     """Run a single test synchronously."""
     print(f"\n{'='*60}")
     print(f"Running {test_name}")
     print(f"{'='*60}")
+    
+    # Calculate directory statistics
+    file_count, total_size = calculate_directory_stats(local_path)
+    size_mb = total_size / (1024 * 1024)
+    print(f"Directory stats: {file_count} files, {size_mb:.1f} MB")
     
     if test_name == "ZIP Upload Test":
         # Create zip file BEFORE establishing connection
@@ -268,6 +289,8 @@ def run_single_test(host, port, username, password, local_path,
         
         result = {
             'test_name': test_name,
+            'file_count': file_count,
+            'total_size_mb': size_mb,
             'zip_time': zip_time,
             'upload_time': upload_time,
             'unzip_time': unzip_time,
@@ -301,6 +324,8 @@ def run_single_test(host, port, username, password, local_path,
         
         result = {
             'test_name': test_name,
+            'file_count': file_count,
+            'total_size_mb': size_mb,
             'upload_time': upload_time,
             'total_time': upload_time,
             'uploaded_files': uploaded_count,
@@ -344,6 +369,10 @@ def run_comprehensive_tests(host, port, username, password, local_path,
     print(f"\n{'='*80}")
     print("SPEED COMPARISON REPORT")
     print(f"{'='*80}")
+    
+    print(f"\nDirectory Information:")
+    print(f"  Files: {zip_result['file_count']}")
+    print(f"  Total size: {zip_result['total_size_mb']:.1f} MB")
     
     print("\nZIP Upload Test:")
     print(f"  Zip creation time: {zip_result['zip_time']:.2f} seconds")
