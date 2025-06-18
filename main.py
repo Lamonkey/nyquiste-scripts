@@ -227,7 +227,10 @@ def run_single_test(host, port, username, password, local_path,
     if test_name == "ZIP Upload Test":
         # Create zip file BEFORE establishing connection
         print("Creating zip file before connection...")
+        zip_start = time.time()
         zip_path = create_zip_file(local_path)
+        zip_time = time.time() - zip_start
+        print(f"Zip creation time: {zip_time:.2f} seconds")
         
         # Now establish SSH connection
         ssh = paramiko.SSHClient()
@@ -256,7 +259,7 @@ def run_single_test(host, port, username, password, local_path,
         unzip_success = ssh_unzip(ssh, remote_zip, remote_dir)
         unzip_time = time.time() - unzip_start
         
-        total_time = upload_time + unzip_time
+        total_time = zip_time + upload_time + unzip_time
         print(f"Total time: {total_time:.2f} seconds")
         
         # Clean up local zip
@@ -265,6 +268,7 @@ def run_single_test(host, port, username, password, local_path,
         
         result = {
             'test_name': test_name,
+            'zip_time': zip_time,
             'upload_time': upload_time,
             'unzip_time': unzip_time,
             'total_time': total_time,
@@ -342,6 +346,7 @@ def run_comprehensive_tests(host, port, username, password, local_path,
     print(f"{'='*80}")
     
     print("\nZIP Upload Test:")
+    print(f"  Zip creation time: {zip_result['zip_time']:.2f} seconds")
     print(f"  Upload time: {zip_result['upload_time']:.2f} seconds")
     print(f"  Unzip time: {zip_result['unzip_time']:.2f} seconds")
     print(f"  Total time: {zip_result['total_time']:.2f} seconds")
